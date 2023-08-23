@@ -1,2 +1,5 @@
 # Developer Environment
 .vscode 
+
+# Distribution/packaging
+ZofCloudConfig.h
