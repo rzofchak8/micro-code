@@ -1,23 +1,25 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <Arduino_LSM6DSOX.h>
+#include <LittleFS_Mbed_RP2040.h>
+#include <Time.h>
 #include <WiFi.h>
 #include <Wire.h>
 #include "c:\Workspace\git\micro-code\arduino\ZofCloudConfig.h"
 
-#include <LittleFS_Mbed_RP2040.h>
 // #include "../ZofCloudConfig.h"
 
 const int lightPin = A0;
 const int tempPin = A1;
 const int moisturePin = A2;
-const size_t capacity = JSON_ARRAY_SIZE(5) + JSON_OBJECT_SIZE(10) + 60;
+const size_t capacity = JSON_ARRAY_SIZE(10) + JSON_OBJECT_SIZE(50) + JSON_STRING_SIZE(4096) + 60;
 DynamicJsonDocument jsonDoc(capacity);
 LittleFS_MBED *myFS;
 
 // TODO: in payload:
 // board temp
-// processing speed
+// processing speed?
+// get time - PUT IN REAL TIME CLOCKS
 // memory?
 // storage?
 // audio information?
@@ -25,7 +27,6 @@ LittleFS_MBED *myFS;
 // String boardInfo = "RP2040 Board: " + String(ARDUINO);
 
 // TODO:
-// error reporting
 // ensure connection security - ssl?
 // write code to recieve messages from cloud
 // write code to start new script from cloud
@@ -60,12 +61,14 @@ void setup() {
     return;
   }
 
-  // readFile(fileName1);
-  // writeFile(fileName1, message, sizeof(message));
+  if (readFile(filename) == "ERROR")
+  {
+    writeFile(filename, "", 1);
+  }
 
   // Init wifi connection
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  WiFi.setTimeout(CLIENT_TIMEOUT);
+  // WiFi.setTimeout(CLIENT_TIMEOUT);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -87,13 +90,14 @@ void loop() {
   int light = analogRead(lightPin);
   float temp = get_external_temperature(true);
   int moisture = get_moisture_percentage();
-
+  int internalTemp = get_internal_temperature();
   // Serial.println(light);
   // Serial.println(temp);
   // Serial.println(moisture);
   JsonObject root = jsonDoc.to<JsonObject>();
   root["board"] = BOARD_NAME;
-  root["temperature"] = temp;
+  root["temperature_ext"] = temp;
+  root["temperature_int"] = internalTemp;
   root["moisture"] = moisture;
   root["light"] = light;
 
@@ -123,14 +127,10 @@ float get_external_temperature(bool fahrenheit) {
   return temperatureC;
 }
 
-float get_internal_temperature() {
-  int temperature_deg = 0;
+int get_internal_temperature() {
+  int temperature_deg = -1;
   if (IMU.temperatureAvailable()) {
     IMU.readTemperature(temperature_deg);
-
-    Serial.print("LSM6DSOX Temperature = ");
-    Serial.print(temperature_deg);
-    Serial.println(" °C");
   }
 
   return temperature_deg;
@@ -158,8 +158,9 @@ bool send_payload(JsonObject &payload) {
       {
         String backlog = readFile(filename);
         deleteFile(filename);
+        writeFile(filename, "", 1);
         missedRequest = false;
-        // TODO: add backlog to error secton of json and send it with current payload
+        payload["backlog"] = backlog;
       }
       
       client.println("POST /submit HTTP/1.1");
@@ -188,9 +189,8 @@ void writeOffline(JsonObject &obj)
 {
   String payloadStr;
   serializeJson(obj, payloadStr);
-  payloadStr += "\n";
   const char* out = payloadStr.c_str();
-  writeFile(filename, out, sizeof(out));
+  appendFile(filename, out, payloadStr.length() + 1);
 }
 
 String readFile(const char * path)
@@ -201,7 +201,7 @@ String readFile(const char * path)
   {
     Serial.println(" => Open Failed");
     digitalWrite(LED_BUILTIN, HIGH);
-    return "";
+    return "ERROR";
   }
 
   char c;
@@ -247,7 +247,7 @@ bool writeFile(const char * path, const char * message, size_t messageSize)
 bool appendFile(const char * path, const char * message, size_t messageSize)
 {
   Serial.print("Appending file: ");
-  Serial.print(path);
+  Serial.println(path);
 
   FILE *file = fopen(path, "a");
 
