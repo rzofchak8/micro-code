@@ -209,9 +209,7 @@ String readFile(const char * path)
   while (numRead)
   {
     numRead = fread((uint8_t *) &c, sizeof(c), 1, file);
-
     if (numRead)
-      Serial.print(c);
       out += c;
   }
   fclose(file);
