@@ -1,46 +1,54 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <Arduino_LSM6DSOX.h>
+// #include <Arduino_LSM6DSOX.h> // for gyroscope/accelerometer
 #include <LittleFS_Mbed_RP2040.h>
-#include <Time.h>
+#include <RTClib.h>
 #include <WiFi.h>
 #include <Wire.h>
-#include "c:\Workspace\git\micro-code\arduino\ZofCloudConfig.h"
 
-// #include "../ZofCloudConfig.h"
+// #include "ZofCloudConfig.h"
 
+bool missedRequest = false;
 const int lightPin = A0;
 const int tempPin = A1;
 const int moisturePin = A2;
 const size_t capacity = JSON_ARRAY_SIZE(10) + JSON_OBJECT_SIZE(50) + JSON_STRING_SIZE(4096) + 60;
+const char backlogFile[] = MBED_LITTLEFS_FILE_PREFIX "/offlineStorage.txt";
 DynamicJsonDocument jsonDoc(capacity);
+RTC_DS3231 rtc;
+DateTime now;
 LittleFS_MBED *myFS;
 
 // TODO: in payload:
-// board temp
 // processing speed?
-// get time - PUT IN REAL TIME CLOCKS
+// ph? need a sensor
 // memory?
 // storage?
 // audio information?
-// stream audio option?? <- probably not
-// String boardInfo = "RP2040 Board: " + String(ARDUINO);
+// error catching for info that we cannot get for whatever reason
 
 // TODO:
+// LCD for local debugging?
 // ensure connection security - ssl?
 // write code to recieve messages from cloud
 // write code to start new script from cloud
-char filename[] = MBED_LITTLEFS_FILE_PREFIX "/offlineStorage.txt";
-bool missedRequest = false;
 
 void setup() {
   Serial.begin(9600);
-    while (!Serial)
-
+  while (!Serial)
+  {
     delay(1000);
+  }
   pinMode(LED_BUILTIN, OUTPUT);
-  Serial.println(BOARD_NAME);
-  Serial.println(ARDUINO);
+
+  // set up real time clock
+  // ATTN: clock MUST BE on pins 4 (sda) and 5 (scl) 
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    digitalWrite(LED_BUILTIN, HIGH);
+  }
+  // Serial.println(BOARD_NAME);
+  // Serial.println(ARDUINO);
 
 #if defined(LFS_MBED_RP2040_VERSION_MIN)
 
@@ -61,14 +69,13 @@ void setup() {
     return;
   }
 
-  if (readFile(filename) == "ERROR")
+  if (readFile(backlogFile) == "ERROR")
   {
-    writeFile(filename, "", 1);
+    writeFile(backlogFile, "", 1);
   }
 
   // Init wifi connection
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  // WiFi.setTimeout(CLIENT_TIMEOUT);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -76,6 +83,7 @@ void setup() {
   }
 
   Serial.println("Connected to WiFi");
+
   // Connect to IMU
   if (!IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
@@ -87,21 +95,20 @@ void setup() {
 
 void loop() {
   // Create payload information to send to server
-  int light = analogRead(lightPin);
-  float temp = get_external_temperature(true);
-  int moisture = get_moisture_percentage();
-  int internalTemp = get_internal_temperature();
-  // Serial.println(light);
-  // Serial.println(temp);
-  // Serial.println(moisture);
   JsonObject root = jsonDoc.to<JsonObject>();
-  root["board"] = BOARD_NAME;
-  root["temperature_ext"] = temp;
-  root["temperature_int"] = internalTemp;
-  root["moisture"] = moisture;
-  root["light"] = light;
+  JsonObject tempObj = root.createNestedObject("temperature");
+  now = rtc.now();
+  tempObj["exterior"] = getExternalTemperature(true);
+  tempObj["board"] = getInternalTemperature();
+  tempObj["clock"] = rtc.getTemperature();
 
-  if (send_payload(root)) {
+  root["board"] = BOARD_NAME;
+  root["moisture"] = getMoisturePercentage();
+  // TODO: regulate light values to make sense?
+  root["light"] = analogRead(lightPin);
+  root["timestamp"] = now.unixtime();
+
+  if (sendPayload(root)) {
     Serial.println("payload sent successfully.");
     digitalWrite(LED_BUILTIN, LOW);
   } else {
@@ -112,31 +119,26 @@ void loop() {
   sleep_ms(3000);
 }
 
-float get_external_temperature(bool fahrenheit) {
-
+float getExternalTemperature(bool fahrenheit) {
   int reading = analogRead(tempPin);
   float voltage = reading * 3.3;
   voltage /= 1024.0;
-
-  /* temperature in Celsius */
-  float temperatureC = (voltage - 0.5) * 100; /*converting from 10 mv per degree wit 500 mV offset */
-  /* Convert to Fahrenheit */
+  // converting from 10 mV/deg with 500 mV offset
+  float temperatureC = (voltage - 0.5) * 100;
   float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
-
   if (fahrenheit) return temperatureF;
   return temperatureC;
 }
 
-int get_internal_temperature() {
+int getInternalTemperature() {
   int temperature_deg = -1;
   if (IMU.temperatureAvailable()) {
     IMU.readTemperature(temperature_deg);
   }
-
   return temperature_deg;
 }
 
-int get_moisture_percentage() {
+int getMoisturePercentage() {
   int reading = analogRead(moisturePin);
   int percentage = map(reading, MOISTURE_AIR, MOISTURE_MAX, 0, 100);
   percentage = max(percentage, 0);
@@ -144,25 +146,19 @@ int get_moisture_percentage() {
   return percentage;
 }
 
-JsonObject create_payload() {
-  JsonObject root = jsonDoc.to<JsonObject>();
-  return root;
-}
-
-bool send_payload(JsonObject &payload) {
+bool sendPayload(JsonObject &payload) {
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     
     if (client.connect(SERVER_IP, SERVER_PORT)) {
       if (missedRequest)
       {
-        String backlog = readFile(filename);
-        deleteFile(filename);
-        writeFile(filename, "", 1);
+        String backlog = readFile(backlogFile);
+        deleteFile(backlogFile);
+        writeFile(backlogFile, "", 1);
         missedRequest = false;
         payload["backlog"] = backlog;
       }
-      
       client.println("POST /submit HTTP/1.1");
       client.println("Host: " + String(SERVER_IP));
       client.println("Content-Type: application/json");
@@ -173,14 +169,16 @@ bool send_payload(JsonObject &payload) {
       client.stop();
       return true;
     } else {
-      Serial.println("not looking ideal for request");
-      // append information into file
       missedRequest = true;
+      Serial.println("cannot connect to server. writing request to file...");
+      payload["error"] = "cannot connecting to server";
       writeOffline(payload);
       return false;
     }
   }
   missedRequest = true;
+  Serial.println("Wifi not connected. Check internet credentials")
+  payload["error"] = "not connected to internet";
   writeOffline(payload);
   return false;
 }
@@ -190,7 +188,7 @@ void writeOffline(JsonObject &obj)
   String payloadStr;
   serializeJson(obj, payloadStr);
   const char* out = payloadStr.c_str();
-  appendFile(filename, out, payloadStr.length() + 1);
+  appendFile(backlogFile, out, payloadStr.length() + 1);
 }
 
 String readFile(const char * path)
@@ -216,7 +214,6 @@ String readFile(const char * path)
       Serial.print(c);
       out += c;
   }
-
   fclose(file);
   return out;
 }
