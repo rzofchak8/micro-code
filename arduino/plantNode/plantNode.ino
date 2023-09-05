@@ -1,12 +1,11 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-// #include <Arduino_LSM6DSOX.h> // for gyroscope/accelerometer
+#include <Arduino_LSM6DSOX.h> // for gyroscope/accelerometer
 #include <LittleFS_Mbed_RP2040.h>
 #include <RTClib.h>
 #include <WiFi.h>
 #include <Wire.h>
-
-// #include "ZofCloudConfig.h"
+#include "ZofCloudConfig.h"
 
 bool missedRequest = false;
 const int lightPin = A0;
@@ -28,10 +27,11 @@ LittleFS_MBED *myFS;
 // error catching for info that we cannot get for whatever reason
 
 // TODO:
-// LCD for local debugging?
-// ensure connection security - ssl?
+// break out filesystem functionality into its own file
 // write code to recieve messages from cloud
+// ensure connection security - ssl?
 // write code to start new script from cloud
+// LCD for local debugging?
 
 void setup() {
   Serial.begin(9600);
@@ -171,13 +171,13 @@ bool sendPayload(JsonObject &payload) {
     } else {
       missedRequest = true;
       Serial.println("cannot connect to server. writing request to file...");
-      payload["error"] = "cannot connecting to server";
+      payload["error"] = "cannot connect to server";
       writeOffline(payload);
       return false;
     }
   }
   missedRequest = true;
-  Serial.println("Wifi not connected. Check internet credentials")
+  Serial.println("Wifi not connected. Check internet credentials");
   payload["error"] = "not connected to internet";
   writeOffline(payload);
   return false;
