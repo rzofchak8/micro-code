@@ -1,19 +1,20 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
+#include <Arduino_JSON.h>
 #include <Arduino_LSM6DSOX.h> // for gyroscope/accelerometer
 #include <LittleFS_Mbed_RP2040.h>
 #include <RTClib.h>
 #include <WiFi.h>
 #include <Wire.h>
-#include "ZofCloudConfig.h"
+// FIXME
+#include "c:\Workspace\git\micro-code\arduino\ZofCloudConfig.h"
+// #include "ZofCloudConfig.h"
 
 bool missedRequest = false;
 const int lightPin = A0;
 const int tempPin = A1;
 const int moisturePin = A2;
-const size_t capacity = JSON_ARRAY_SIZE(10) + JSON_OBJECT_SIZE(50) + JSON_STRING_SIZE(4096) + 60;
 const char backlogFile[] = MBED_LITTLEFS_FILE_PREFIX "/offlineStorage.txt";
-DynamicJsonDocument jsonDoc(capacity);
+
 RTC_DS3231 rtc;
 DateTime now;
 LittleFS_MBED *myFS;
@@ -47,8 +48,6 @@ void setup() {
     Serial.println("Couldn't find RTC");
     digitalWrite(LED_BUILTIN, HIGH);
   }
-  // Serial.println(BOARD_NAME);
-  // Serial.println(ARDUINO);
 
 #if defined(LFS_MBED_RP2040_VERSION_MIN)
 
@@ -95,13 +94,13 @@ void setup() {
 
 void loop() {
   // Create payload information to send to server
-  JsonObject root = jsonDoc.to<JsonObject>();
-  JsonObject tempObj = root.createNestedObject("temperature");
+  JSONVar root;
+  JSONVar tempObj;
   now = rtc.now();
   tempObj["exterior"] = getExternalTemperature(true);
   tempObj["board"] = getInternalTemperature();
   tempObj["clock"] = rtc.getTemperature();
-
+  root["temperature"] = tempObj;
   root["board"] = BOARD_NAME;
   root["moisture"] = getMoisturePercentage();
   // TODO: regulate light values to make sense?
@@ -146,7 +145,8 @@ int getMoisturePercentage() {
   return percentage;
 }
 
-bool sendPayload(JsonObject &payload) {
+bool sendPayload(JSONVar &payload) {
+  String payloadStr = JSON.stringify(payload);
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     
@@ -162,9 +162,9 @@ bool sendPayload(JsonObject &payload) {
       client.println("POST /submit HTTP/1.1");
       client.println("Host: " + String(SERVER_IP));
       client.println("Content-Type: application/json");
-      client.println("Content-Length: " + String(capacity));
+      client.println("Content-Length: " + String(payloadStr.length()));
       client.println();
-      serializeJson(payload, client);
+      client.println(payloadStr);
       client.println();
       client.stop();
       return true;
@@ -183,10 +183,9 @@ bool sendPayload(JsonObject &payload) {
   return false;
 }
 
-void writeOffline(JsonObject &obj)
+void writeOffline(JSONVar &obj)
 {
-  String payloadStr;
-  serializeJson(obj, payloadStr);
+  String payloadStr = JSON.stringify(obj);
   const char* out = payloadStr.c_str();
   appendFile(backlogFile, out, payloadStr.length() + 1);
 }
