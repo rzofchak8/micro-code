@@ -146,7 +146,6 @@ int getMoisturePercentage() {
 }
 
 bool sendPayload(JSONVar &payload) {
-  String payloadStr = JSON.stringify(payload);
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     
@@ -159,6 +158,7 @@ bool sendPayload(JSONVar &payload) {
         missedRequest = false;
         payload["backlog"] = backlog;
       }
+      String payloadStr = JSON.stringify(payload);
       client.println("POST /submit HTTP/1.1");
       client.println("Host: " + String(SERVER_IP));
       client.println("Content-Type: application/json");
